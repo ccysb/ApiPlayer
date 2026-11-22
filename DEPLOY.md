@@ -171,6 +171,33 @@ pnpm build:extension
 - 扩展配置与网页版共用 localStorage 结构，但不同环境的存储空间互相独立，可用 Gist 同步迁移。
 - 以后修改页面表达式时，注意保持在 Alpine CSP 版支持的子集内（简单方法调用可用；`String()` 等全局函数、可选链、箭头函数、内联函数定义、复杂对象字面量、分号组合语句、正则字面量或除号都移到 `app()` 的方法里）。例如剧集名 `ep.n.replace(/第|集/g,'')` 要写成 `episodeLabel(ep)`。若控制台出现 `CSP Parser Error: Unexpected token: xxx`（包括 `OPERATOR "/"`），优先把该属性表达式改成无参方法调用；`build:extension` 现在也会拦截属性里未加引号的 `/`。
 
+### 8. CRX 打包与分发
+
+```bash
+pnpm build:crx                                       # 生成 CRX + 商店 ZIP
+pnpm build:crx -- --host https://dl.example.com/apiplayer   # 附带自托管更新资源
+```
+
+产物（均在 `crx-output/`，已被 Git 忽略）：
+
+| 文件 | 说明 |
+| --- | --- |
+| `ApiPlayer.crx` | 本地自签名 CRX3 |
+| `apiplayer-store.zip` | 商店上传包（`manifest.json` 在根目录，无 `update_url`） |
+| `ApiPlayer.pem` | 私钥，决定扩展 ID，务必保管且不要提交 |
+| `update.xml` | 仅 `--host` 时生成：自托管更新清单 |
+| `chrome-forcelist.reg` / `edge-forcelist.reg` | 仅 `--host` 时生成：企业策略注册表 |
+
+关于安装：
+
+- 新版 Chrome / Edge 禁止拖拽 / 双击安装本地 CRX（提示"此扩展不是来自任何已知来源"），这是浏览器安全策略，CRX 本身无损；本项目未上架商店，该警告无法在不上架的前提下消除。
+- **普通用户**：用上面的第 7 节方式（开发者模式加载 `extension/` 目录）。
+- **组织管理设备**：用 `--host` 指向你自己的 HTTPS 地址，把 `ApiPlayer.crx` 与 `update.xml` 上传后，管理员导入 `.reg` 走企业策略强制安装（家庭版 Windows 无效；强制安装用户无法自行卸载；Edge 未加域时仅限商店扩展）。
+- 自托管的 `update.xml` / CRX 必须走 HTTPS 且证书为公网可信 CA，自签名证书会被拒绝更新。
+- 默认打包**不向 manifest 注入 `update_url`**，以保证商店 ZIP 干净；`update_url` 只在企业策略 / 自托管更新通道中使用。
+
+完整的安装步骤、方式对比、私钥与扩展 ID 说明见 [INSTALL.md](INSTALL.md)。
+
 ## 四、验证清单
 
 部署后建议按顺序确认：
