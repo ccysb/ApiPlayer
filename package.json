@@ -1,0 +1,33 @@
+{
+  "name": "apiplayer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "CMS 聚合播放器：支持 Workers / Pages / Vercel / Koyeb / Wasmer / 浏览器扩展 / Node / Bun",
+  "bin": {
+    "apiplayer": "./server.js"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "serve": "node server.js",
+    "build:static": "node scripts/build-static.mjs",
+    "build:tailwind": "node scripts/build-tailwind.mjs",
+    "build:extension": "node scripts/build-static.mjs && node scripts/build-tailwind.mjs && node scripts/build-extension.mjs",
+    "build:crx": "node scripts/build-static.mjs && node scripts/build-tailwind.mjs && node scripts/build-extension.mjs && node scripts/build-crx.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "crx3": "^2.0.0",
+    "jsdom": "^29.1.1",
+    "tailwindcss": "^3.4.19",
+    "wrangler": "^4.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "sharp",
+      "workerd"
+    ]
+  }
+}

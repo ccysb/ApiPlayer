@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 滚动条跟随主题：:root 为日间，html.dark 为夜间（applyTheme 会切换该 class） */
+:root {
+  color-scheme: light;
+  --sb-track: #f3f4f6;
+  --sb-thumb: #cbd5e1;
+  --sb-thumb-hover: #94a3b8;
+}
+html.dark {
+  color-scheme: dark;
+  --sb-track: #030712;
+  --sb-thumb: #374151;
+  --sb-thumb-hover: #4b5563;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sb-thumb) var(--sb-track);
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: var(--sb-track); }
+*::-webkit-scrollbar-thumb {
+  background: var(--sb-thumb);
+  border: 2px solid var(--sb-track);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--sb-thumb-hover); }
+*::-webkit-scrollbar-corner { background: var(--sb-track); }
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+.scrollbar-hide::-webkit-scrollbar { display: none; }

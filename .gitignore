@@ -1,0 +1,21 @@
+# 依赖
+node_modules/
+
+# Wrangler 本地缓存
+.wrangler/
+
+# CRX 打包产物与私钥（私钥绝不能提交）
+crx-output/
+*.pem
+*.crx
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+
+# 临时调试文件
+.tmp-*
+/.workbuddy/
