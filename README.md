@@ -64,7 +64,7 @@ pnpm build:extension       # 生成 extension/ 目录
 
 在 `chrome://extensions`（Edge 为 `edge://extensions`）打开「开发者模式」→「加载已解压的扩展程序」→ 选择 `extension/` 目录。点击工具栏图标会在新标签页打开播放器。
 
-打包为 CRX 见下方 [CRX 打包](#crx-打包)。
+关于"未知来源"警告、CRX 安装方式对比与企业策略安装，见 [INSTALL.md](INSTALL.md) 与下方 [CRX 打包](#crx-打包)。
 
 ## 部署方式
 
@@ -83,10 +83,11 @@ pnpm build:extension       # 生成 extension/ 目录
 
 ## CRX 打包
 
-`pnpm build:crx` 会生成两类产物到 `crx-output/`：
+`pnpm build:crx` 会在 `crx-output/` 生成：
 
 - `ApiPlayer.crx`：CRX3 扩展包
-- `apiplayer-store.zip`：可上传 Chrome / Edge 扩展商店的 ZIP（`manifest.json` 在根目录）
+- `apiplayer-store.zip`：可上传 Chrome / Edge 扩展商店的 ZIP（`manifest.json` 在根目录，不含 `update_url`）
+- 追加 `--host` 时额外生成 `update.xml`（更新清单）与 `chrome-forcelist.reg` / `edge-forcelist.reg`（企业策略注册表）
 
 ### 是否需要私钥
 
@@ -102,11 +103,18 @@ pnpm build:crx
 
 # 后续打包：复用私钥，保持扩展 ID 不变
 node scripts/build-crx.mjs --key ./crx-output/ApiPlayer.pem
+
+# 附带生成自托管更新资源（update.xml + Chrome/Edge 企业策略 .reg）
+pnpm build:crx -- --host https://dl.example.com/apiplayer
+
+# 查询当前私钥对应的扩展 ID
+node scripts/ext-id.mjs
 ```
 
 > **重要**：
 > - 私钥 `*.pem` 已被 `.gitignore` 忽略，**绝不提交**。丢失私钥将无法保持原扩展 ID。
-> - 新版 Chrome / Edge 在 Windows / macOS 上默认**禁止从本地文件安装 CRX**（仅企业策略等特殊场景允许）。普通用户请通过扩展商店或开发者模式加载，本地 CRX 主要用于企业分发 / 策略安装 / 旧版浏览器。
+> - 新版 Chrome / Edge 在 Windows / macOS 上**禁止拖拽 / 双击安装本地 CRX**，会提示"此扩展不是来自任何已知来源"——这是浏览器安全策略，CRX 本身无问题。本项目未上架商店，该警告无法在不上架的前提下消除。
+> - **普通用户**：用开发者模式加载 `extension/` 目录；**组织管理设备**：可用 `--host` 生成自托管 `update.xml` + 企业策略 `.reg` 强制安装（家庭版无效）。三种方式的完整步骤与限制见 [INSTALL.md](INSTALL.md)。
 
 ## 项目结构
 
