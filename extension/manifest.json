@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "ApiPlayer",
+  "version": "1.0.6",
+  "description": "CMS 聚合播放器浏览器扩展（主题滚动条、全高集数面板、CSP 表达式兼容）",
+  "action": {
+    "default_title": "打开 ApiPlayer"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "index.html",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; media-src 'self' https: http:; connect-src * http: https:"
+  }
+}

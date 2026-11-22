@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+  <meta name="theme-color" content="#8b5cf6">
+  <title>ApiPlayer</title>
+  <link rel="stylesheet" href="vendor/tailwind.css">
+  <script src="vendor/alpine.js" defer></script>
+  <script src="vendor/hls.js"></script>
+  <script src="vendor/artplayer.js"></script>
+  
+  <style>
+    [x-cloak]{display:none!important}
+    /* 滚动条跟随主题：:root 为日间，html.dark 为夜间（applyTheme 会切换该 class） */
+    :root{
+      color-scheme:light;
+      --sb-track:#f3f4f6;
+      --sb-thumb:#cbd5e1;
+      --sb-thumb-hover:#94a3b8;
+    }
+    html.dark{
+      color-scheme:dark;
+      --sb-track:#030712;
+      --sb-thumb:#374151;
+      --sb-thumb-hover:#4b5563;
+    }
+    *{scrollbar-width:thin;scrollbar-color:var(--sb-thumb) var(--sb-track)}
+    *::-webkit-scrollbar{width:8px;height:8px}
+    *::-webkit-scrollbar-track{background:var(--sb-track)}
+    *::-webkit-scrollbar-thumb{background:var(--sb-thumb);border:2px solid var(--sb-track);border-radius:9999px}
+    *::-webkit-scrollbar-thumb:hover{background:var(--sb-thumb-hover)}
+    *::-webkit-scrollbar-corner{background:var(--sb-track)}
+    .scrollbar-hide{-ms-overflow-style:none;scrollbar-width:none}
+    .scrollbar-hide::-webkit-scrollbar{display:none}
+    .card-hover{transition:all .25s cubic-bezier(.4,0,.2,1)}
+    .card-hover:hover{transform:translateY(-6px);box-shadow:0 20px 40px rgba(0,0,0,.15)}
+    .line-clamp-1{overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1}
+    .line-clamp-2{overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+    @keyframes spin { to { transform: rotate(360deg) } }
+    .animate-spin { animation: spin 1s linear infinite }
+    /* 主内容布局：网格保留海报宽度 竖屏 224px / 横屏 280px；卡片墙由 JS 绝对定位 */
+    .ts-grid-poster{display:grid;grid-template-columns:repeat(auto-fill,minmax(224px,1fr));gap:1rem}
+    .ts-grid-land{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem}
+    @media (max-width:640px){.ts-grid-poster,.ts-grid-land{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    .ts-wall{position:relative;width:100%;min-height:1px}
+    .ts-wall>.ts-wf-item{position:absolute;top:0;left:0;box-sizing:border-box}
+    .ts-grid-poster>.ts-wf-item,.ts-grid-land>.ts-wf-item{position:static;width:auto!important;left:auto!important;top:auto!important}
+    /* 全宽布局：容器铺满可用宽度，仅保留内容内边距；clip 避免窄屏出现横向滚动条且不影响 sticky 顶栏 */
+    body{overflow-x:clip}
+  </style>
+</head>
+<body class="bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 min-h-screen" x-data="app" x-init="init()" :class="bodyOverlayClass()">
+
+<header class="sticky top-0 z-40 bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl border-b border-gray-200 dark:border-gray-800">
+  <div class="w-full px-4 sm:px-6 py-3">
+    <div class="flex flex-wrap items-center gap-3">
+      <!-- 左上角：API 源名称；小屏幕额外提供搜索图标 -->
+      <div class="flex flex-1 items-center gap-2 justify-between">
+        <div class="min-w-0 leading-tight mr-2">
+          <div class="text-lg font-semibold truncate" x-text="activeSourceName || '未选择API源'" :title="activeSourceName"></div>
+        </div>        
+        <button @click="openMobileSearch()" class="sm:hidden p-2 -ml-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" title="搜索">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        </button>
+
+      </div>
+
+      <!-- 桌面端搜索框居中 -->
+      <div class="hidden sm:block max-w-md">
+        <div class="relative">
+          <input type="text" x-model="searchWd" @keydown.enter="doSearch()" @focus="showSearchHist=true" @blur="hideSearchHistLater()" placeholder="搜索视频..." class="w-full pl-10 pr-20 py-2.5 rounded-full bg-gray-100 dark:bg-gray-800 border-0 focus:ring-2 focus:ring-primary-500 text-sm outline-none">
+          <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+          <button @click="doSearch()" class="absolute right-1.5 top-1/2 -translate-y-1/2 px-4 py-1.5 rounded-full bg-gradient-to-r from-primary-600 to-primary-500 text-white text-sm font-medium hover:shadow-lg transition-shadow">搜索</button>
+          
+          <div x-show="showSearchHist && searchHistory.length" class="absolute top-full left-0 right-0 mt-2 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 py-2 z-50">
+            <template x-for="term in searchHistory.slice(0,5)" :key="term">
+              <div class="flex items-center group px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700">
+                <button @click="selectSearchHistory(term)" class="flex-1 flex items-center gap-2 text-left text-sm">
+                  <svg class="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                  <span x-text="term" class="truncate"></span>
+                </button>
+                <button @click="removeSearchHistory(term)" class="ml-2 p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors" title="删除">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <!-- 小屏幕：点击搜索图标后弹出搜索框 -->
+      <div x-show="mobileSearchOpen" x-transition class="w-full order-last sm:hidden mt-1">
+        <div class="relative">
+          <input type="text" x-ref="mobileSearchInput" x-model="searchWd" @keydown.enter="doMobileSearch()" @focus="showSearchHist=true" @blur="hideSearchHistLater()" placeholder="搜索视频..." class="w-full pl-10 pr-20 py-2.5 rounded-full bg-gray-100 dark:bg-gray-800 border-0 focus:ring-2 focus:ring-primary-500 text-sm outline-none">
+          <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+          <button @click="doMobileSearch()" class="absolute right-1.5 top-1/2 -translate-y-1/2 px-4 py-1.5 rounded-full bg-gradient-to-r from-primary-600 to-primary-500 text-white text-sm font-medium">搜索</button>
+          <div x-show="showSearchHist && searchHistory.length" class="absolute top-full left-0 right-0 mt-2 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 py-2 z-50">
+            <template x-for="term in searchHistory.slice(0,5)" :key="term">
+              <button @click="selectMobileSearchHistory(term)" class="w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2">
+                <svg class="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span x-text="term" class="truncate"></span>
+              </button>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex-1 min-w-0 flex items-center justify-end gap-2 shrink-0">
+        <button @click="toggleThemeMode()" class="p-2.5 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" :title="'主题：' + cfg.theme">
+          <template x-if="cfg.theme==='light'">
+            <svg class="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-1.414-1.414M6.343 6.343 4.93 4.93m12.728 1.414L16.242 7.76M6.343 17.657l-1.414 1.414M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+            </svg>
+          </template>
+          <template x-if="cfg.theme==='dark'">
+            <svg class="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+            </svg>
+          </template>
+          <template x-if="cfg.theme==='auto'">
+            <svg class="w-5 h-5 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+            </svg>
+          </template>
+        </button>
+
+        <button @click="toggleFavPanel()" class="relative p-2.5 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" :class="favButtonClass()">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+          <span x-show="fav.length" class="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center" x-text="fav.length"></span>
+        </button>
+
+        <button @click="toggleHistPanel()" class="relative p-2.5 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" :class="histButtonClass()">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span x-show="his.length" class="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center" x-text="his.length"></span>
+        </button>
+
+        <button @click="toggleSettingsPanel()" class="p-2.5 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+  <div id="typeNavContainer" class="border-t border-gray-200 dark:border-gray-800 bg-white/90 dark:bg-gray-900/90 backdrop-blur" x-show="classes.length" x-transition>
+    <div class="w-full px-4 sm:px-6">
+      <div class="flex items-center py-2">
+        <ul class="flex items-center flex-nowrap overflow-hidden flex-1 gap-1">
+          <li>
+            <button @click="selectAllTypes()" class="px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all" :class="currentType==='0'?'bg-gradient-to-r from-primary-600 to-primary-500 text-white shadow-lg shadow-primary-500/30':'hover:bg-gray-100 dark:hover:bg-gray-800'">全部</button>
+          </li>
+          <template x-for="c in visibleClasses" :key="c.type_id">
+            <li>
+              <button @click="selectType(c.type_id)" class="px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all" :class="typeIsActive(c.type_id)?'bg-gradient-to-r from-primary-600 to-primary-500 text-white shadow-lg shadow-primary-500/30':'hover:bg-gray-100 dark:hover:bg-gray-800'" x-text="c.type_name"></button>
+            </li>
+          </template>
+        </ul>
+        <div x-show="hiddenClasses.length > 0" class="relative pl-2">
+          <button @click="toggleMoreTypes($event)" class="px-4 py-1.5 rounded-full text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex items-center" title="更多分类">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+          </button>
+          <div x-show="showMoreTypes" x-transition @click.away="showMoreTypes=false" class="absolute right-0 top-full mt-1 w-48 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 py-1 z-50 max-h-80 overflow-y-auto">
+            <template x-for="c in hiddenClasses" :key="c.type_id">
+              <button @click="selectTypeCloseMore(c.type_id)" class="w-full px-4 py-2 text-left text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-primary-50 dark:hover:bg-primary-900/30" x-text="c.type_name"></button>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="w-full px-4 sm:px-6 py-6">
+  <div x-show="apiError" x-transition class="mb-4 flex items-start gap-3 p-4 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-300">
+    <svg class="w-5 h-5 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    <div class="flex-1 min-w-0">
+      <p class="text-sm font-semibold mb-1">数据加载失败</p>
+      <p class="text-xs break-words" x-text="apiError"></p>
+    </div>
+    <button @click="apiError=''" class="shrink-0 text-red-500 hover:text-red-700" title="关闭">✕</button>
+  </div>
+
+  <div x-show="!sources.length" class="flex flex-col items-center justify-center py-20">
+    <div class="w-20 h-20 rounded-2xl bg-gray-100 dark:bg-gray-800 flex items-center justify-center mb-4">
+      <svg class="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+    </div>
+    <h3 class="text-lg font-semibold mb-2">还没有添加API源</h3>
+    <p class="text-gray-500 mb-4">点击右上角设置按钮添加视频源</p>
+    <button @click="openSettingsSources()" class="px-6 py-2.5 rounded-xl bg-gradient-to-r from-primary-600 to-primary-500 text-white font-medium hover:shadow-lg hover:shadow-primary-500/30 transition-shadow">去添加</button>
+  </div>
+
+  <div x-show="loading" class="py-10 text-center text-gray-500">
+    <svg class="animate-spin h-8 w-8 mx-auto text-primary-500" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+    </svg>
+  </div>
+
+  <div id="mainWall" x-show="videos.length" :class="mainWallClass()">
+    <template x-for="(item, index) in videos" :key="item.vod_id + '_' + index">
+      <div @click="openPlayer(item)" class="ts-wf-item group relative bg-white dark:bg-gray-900 rounded overflow-hidden shadow-sm hover:shadow-xl card-hover cursor-pointer border border-gray-100 dark:border-gray-800">
+        <div class="card-media relative bg-gray-100 dark:bg-gray-800 w-full" :class="cfg.listLayout==='poster' ? 'aspect-[2/3]' : 'aspect-[5/3]'">
+          <img :src="item.vod_pic || placeholderImg" loading="lazy" class="w-full h-full object-cover" @error="$event.target.src=placeholderImg">
+          <div class="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent"></div>
+          <span x-show="cardTagText('tl', item)" class="absolute top-2 left-2 px-2 py-1 rounded-md border-white/60 bg-black/40 backdrop-blur text-white text-xs font-medium" x-text="cardTagText('tl', item)"></span>
+          <span x-show="cardTagText('tr', item)" class="absolute top-2 right-2 px-2 py-1 rounded-md border-white/60 bg-black/40 backdrop-blur text-white text-xs font-medium" x-text="cardTagText('tr', item)"></span>
+          <span x-show="cardTagText('bl', item)" class="absolute bottom-2 left-2 px-2 py-1 rounded-md border-white/60 bg-black/40 backdrop-blur text-white text-xs font-medium" x-text="cardTagText('bl', item)"></span>
+          <span x-show="cardTagText('br', item)" class="absolute bottom-2 right-2 px-2 py-1 rounded-md border-white/60 bg-black/40 backdrop-blur text-white text-xs font-medium" x-text="cardTagText('br', item)"></span>
+          <button @click.stop="toggleFav(item)" class="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/40 backdrop-blur flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <svg class="w-4 h-4" :class="isFav(item.vod_id)?'text-red-500 fill-red-500':'text-white'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+          </button>
+        </div>
+        <div class="p-3">
+          <h3 class="font-semibold text-sm line-clamp-2 leading-tight" x-text="item.vod_name || '未命名'"></h3>
+          <div class="text-xs text-gray-500 mt-1 flex justify-between gap-2">
+            <span x-show="cardTagText('sub1', item)" x-text="cardTagText('sub1', item)" class="truncate"></span>
+            <span x-show="cardTagText('sub2', item)" x-text="cardTagText('sub2', item)" class="truncate text-right"></span>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <div x-show="cfg.loadMode==='page' && totalPages>1" class="flex justify-center items-center gap-2 mt-8 flex-wrap">
+    <button @click="prevPage()" class="px-4 py-2 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 hover:border-primary-500 text-sm font-medium transition-colors" :class="page<=1?'opacity-50 cursor-not-allowed':''">上一页</button>
+    <template x-for="p in pageRange()" :key="p">
+      <button @click="goPage(p)" class="w-10 h-10 rounded-xl text-sm font-medium transition-all" :class="p===page?'bg-gradient-to-r from-primary-600 to-primary-500 text-white shadow-lg shadow-primary-500/30':'bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 hover:border-primary-500'" x-text="p"></button>
+    </template>
+    <button @click="nextPage()" class="px-4 py-2 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 hover:border-primary-500 text-sm font-medium transition-colors" :class="page>=totalPages?'opacity-50 cursor-not-allowed':''">下一页</button>
+  </div>
+
+  <div x-show="cfg.loadMode==='waterfall' && videos.length && page < totalPages && !cfg.autoLoadMore" class="flex justify-center mt-8">
+    <button @click="loadMore()" :disabled="loading" class="px-6 py-3 rounded-xl bg-gradient-to-r from-primary-600 to-primary-500 text-white font-medium hover:shadow-lg hover:shadow-primary-500/30 transition-shadow disabled:opacity-50">
+      <span x-show="!loading">加载更多</span>
+      <span x-show="loading">加载中...</span>
+    </button>
+  </div>
+
+  <div id="loadSentinel" class="h-10"></div>
+
+  <div x-show="sources.length && !loading && !videos.length" class="flex flex-col items-center justify-center py-20">
+    <div class="w-16 h-16 rounded-2xl bg-gray-100 dark:bg-gray-800 flex items-center justify-center mb-4">
+      <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg>
+    </div>
+    <p class="text-gray-500">暂无视频数据</p>
+    <p class="text-gray-400 text-sm mt-1">尝试切换分类或搜索</p>
+  </div>
+</main>
+
+<div x-show="showFav" x-transition @click.away="closeFavPanel()" class="fixed right-0 top-0 h-full w-full sm:w-80 bg-white dark:bg-gray-900 shadow-2xl z-50 overflow-hidden flex flex-col border-l border-gray-200 dark:border-gray-800">
+  <div class="p-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+    <h2 class="font-bold text-lg">我的收藏</h2>
+    <button @click="closeFavPanel()" class="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div class="flex-1 overflow-y-auto p-4 space-y-3">
+    <template x-for="item in fav" :key="item.vod_id">
+      <div @click="openFavItem(item)" class="flex gap-3 p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer transition-colors">
+        <img :src="item.vod_pic || placeholderImg" class="w-12 h-16 rounded-lg object-cover bg-gray-200 dark:bg-gray-700 flex-shrink-0">
+        <div class="flex-1 min-w-0">
+          <h4 class="font-medium text-sm line-clamp-1" x-text="item.vod_name"></h4>
+          <p class="text-xs text-gray-500 mt-0.5" x-text="item.type_name || ''"></p>
+        </div>
+        <button @click.stop="toggleFav(item)" class="p-1.5 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500">
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+        </button>
+      </div>
+    </template>
+    <div x-show="!fav.length" class="text-center text-gray-400 py-8">暂无收藏</div>
+  </div>
+</div>
+
+<div x-show="showHist" x-transition @click.away="showHist=false" class="fixed right-0 top-0 h-full w-full sm:w-80 bg-white dark:bg-gray-900 shadow-2xl z-50 overflow-hidden flex flex-col border-l border-gray-200 dark:border-gray-800">
+  <div class="p-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+    <h2 class="font-bold text-lg">播放历史</h2>
+    <div class="flex items-center gap-2">
+      <button @click="clearHist()" class="text-xs text-red-500 hover:text-red-600">清空</button>
+      <button @click="showHist=false" class="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="flex-1 overflow-y-auto p-4 space-y-3">
+    <template x-for="item in his" :key="item.vod_id + '_' + item.last_watch_time">
+      <div @click="openHistItem(item)" class="flex gap-3 p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer transition-colors">
+        <img :src="item.vod_pic || placeholderImg" class="w-12 h-16 rounded-lg object-cover bg-gray-200 dark:bg-gray-700 flex-shrink-0">
+        <div class="flex-1 min-w-0">
+          <h4 class="font-medium text-sm line-clamp-1" x-text="item.vod_name"></h4>
+          <p class="text-xs text-gray-500 mt-0.5" x-text="formatTime(item.last_watch_time)"></p>
+        </div>
+      </div>
+    </template>
+    <div x-show="!his.length" class="text-center text-gray-400 py-8">暂无历史</div>
+  </div>
+</div>
+
+<div x-show="showSettings" x-transition class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" @click.self="showSettings=false">
+  <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-lg max-h-full overflow-hidden flex flex-col" @click.stop>
+    <div class="p-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+      <h2 class="font-bold text-lg">设置中心</h2>
+      <button @click="showSettings=false" class="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="flex border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50">
+      <button @click="settingsTab='basic'" class="px-4 py-3 font-medium text-sm border-b-2 transition-all flex-1" :class="settingsTab==='basic'?'border-primary-500 text-primary-600 dark:text-primary-400 bg-white dark:bg-gray-900':'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'">基础</button>
+      <button @click="settingsTab='layout'" class="px-4 py-3 font-medium text-sm border-b-2 transition-all flex-1" :class="settingsTab==='layout'?'border-primary-500 text-primary-600 dark:text-primary-400 bg-white dark:bg-gray-900':'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'">布局</button>
+      <button @click="settingsTab='sources'" class="px-4 py-3 font-medium text-sm border-b-2 transition-all flex-1" :class="settingsTab==='sources'?'border-primary-500 text-primary-600 dark:text-primary-400 bg-white dark:bg-gray-900':'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'">API源</button>
+      <button @click="settingsTab='data'" class="px-4 py-3 font-medium text-sm border-b-2 transition-all flex-1" :class="settingsTab==='data'?'border-primary-500 text-primary-600 dark:text-primary-400 bg-white dark:bg-gray-900':'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'">数据</button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto p-4">
+      <div x-show="settingsTab==='basic'" class="space-y-6">
+
+        <div>
+          <label class="block text-sm font-medium mb-2">API 代理地址</label>
+          <input type="text" x-model="cfg.apiProxy" @change="reloadAfterProxyChange()" placeholder="留空 = 使用当前站点（同源）" class="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-primary-500 focus:border-primary-500">
+          <p class="text-xs text-gray-500 mt-2">留空时请求当前站点的 /?u= 接口（适用于 Cloudflare / Vercel / node server.js）。若以纯静态方式部署（如 npx serve、GitHub Pages），此接口不存在，会返回网页导致加载失败；此时请填入一个已部署的本程序地址，例如 https://api.example.workers.dev 。</p>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-2">分页模式</label>
+          <label class="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-800 cursor-pointer">
+            <span class="text-sm font-medium">自动加载（无限滚动）</span>
+            <input type="checkbox" :checked="cfg.loadMode==='waterfall'" @change="setLoadMode($event.target.checked?'waterfall':'page')" class="w-5 h-5 rounded text-primary-600 focus:ring-primary-500">
+          </label>
+          <p class="text-xs text-gray-500 mt-2">关闭时为「上下页翻页」模式，手动切换页码；开启后滚动到底部自动加载更多。</p>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-2">主内容瀑布流</label>
+          <label class="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-800 cursor-pointer">
+            <span class="text-sm font-medium">卡片墙瀑布流模式</span>
+            <input type="checkbox" :checked="!!cfg.cardWall" @change="toggleCardWall($event.target.checked)" class="w-5 h-5 rounded text-primary-600 focus:ring-primary-500">
+          </label>
+          <p class="text-xs text-gray-500 mt-2">把主内容区从网格改为卡片墙瀑布流排列，保留海报宽度设定：竖屏 224px、横屏 280px。配合上面的「自动加载（无限滚动）」即为无限滚动瀑布流。</p>
+        </div>
+
+      </div>
+
+      <div x-show="settingsTab==='layout'" class="space-y-6">
+        <div>
+          <label class="block text-sm font-medium mb-2">视频布局</label>
+          <div class="grid grid-cols-2 gap-2">
+            <button @click="setListLayout('poster')" class="p-3 rounded-xl border-2 text-sm" :class="cfg.listLayout==='poster'?'border-primary-500 bg-primary-50 dark:bg-primary-900/20':'border-gray-200 dark:border-gray-700'">竖图</button>
+            <button @click="setListLayout('landscape')" class="p-3 rounded-xl border-2 text-sm" :class="cfg.listLayout==='landscape'?'border-primary-500 bg-primary-50 dark:bg-primary-900/20':'border-gray-200 dark:border-gray-700'">横图</button>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-2">卡片标签字段</label>
+          <p class="text-xs text-gray-500 mb-2">四角标签及标题下方两行，均从下方字段中选择（选"不显示"则隐藏）</p>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <span class="text-xs text-gray-500">左上角</span>
+              <select @change="setCardTag('tl', $event.target.value)" :value="activeCardTags().tl" class="w-full mt-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1.5">
+                <option value="">不显示</option>
+                <option value="type">分类</option>
+                <option value="hits">热度</option>
+                <option value="lang">语言</option>
+                <option value="year">年代</option>
+                <option value="area">地区</option>
+                <option value="actor">演员</option>
+                <option value="director">导演</option>
+                <option value="tag">标签</option>
+                <option value="duration">时长</option>
+                <option value="state">资源类别</option>
+                <option value="remarks">备注</option>
+                <option value="pubdate">上映日期</option>
+              </select>
+            </div>
+            <div>
+              <span class="text-xs text-gray-500">右上角</span>
+              <select @change="setCardTag('tr', $event.target.value)" :value="activeCardTags().tr" class="w-full mt-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1.5">
+                <option value="">不显示</option>
+                <option value="type">分类</option>
+                <option value="hits">热度</option>
+                <option value="lang">语言</option>
+                <option value="year">年代</option>
+                <option value="area">地区</option>
+                <option value="actor">演员</option>
+                <option value="director">导演</option>
+                <option value="tag">标签</option>
+                <option value="duration">时长</option>
+                <option value="state">资源类别</option>
+                <option value="remarks">备注</option>
+                <option value="pubdate">上映日期</option>
+              </select>
+            </div>
+            <div>
+              <span class="text-xs text-gray-500">左下角</span>
+              <select @change="setCardTag('bl', $event.target.value)" :value="activeCardTags().bl" class="w-full mt-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1.5">
+                <option value="">不显示</option>
+                <option value="type">分类</option>
+                <option value="hits">热度</option>
+                <option value="lang">语言</option>
+                <option value="year">年代</option>
+                <option value="area">地区</option>
+                <option value="actor">演员</option>
+                <option value="director">导演</option>
+                <option value="tag">标签</option>
+                <option value="duration">时长</option>
+                <option value="state">资源类别</option>
+                <option value="remarks">备注</option>
+                <option value="pubdate">上映日期</option>
+              </select>
+            </div>
+            <div>
+              <span class="text-xs text-gray-500">右下角</span>
+              <select @change="setCardTag('br', $event.target.value)" :value="activeCardTags().br" class="w-full mt-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1.5">
+                <option value="">不显示</option>
+                <option value="type">分类</option>
+                <option value="hits">热度</option>
+                <option value="lang">语言</option>
+                <option value="year">年代</option>
+                <option value="area">地区</option>
+                <option value="actor">演员</option>
+                <option value="director">导演</option>
+                <option value="tag">标签</option>
+                <option value="duration">时长</option>
+                <option value="state">资源类别</option>
+                <option value="remarks">备注</option>
+                <option value="pubdate">上映日期</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-2">标题下方两行</label>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <span class="text-xs text-gray-500">第一行</span>
+              <select @change="setCardTag('sub1', $event.target.value)" :value="activeCardTags().sub1" class="w-full mt-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1.5">
+                <option value="">不显示</option>
+                <option value="type">分类</option>
+                <option value="hits">热度</option>
+                <option value="lang">语言</option>
+                <option value="year">年代</option>
+                <option value="area">地区</option>
+                <option value="actor">演员</option>
+                <option value="director">导演</option>
+                <option value="tag">标签</option>
+                <option value="duration">时长</option>
+                <option value="state">资源类别</option>
+                <option value="remarks">备注</option>
+                <option value="pubdate">上映日期</option>
+              </select>
+            </div>
+            <div>
+              <span class="text-xs text-gray-500">第二行</span>
+              <select @change="setCardTag('sub2', $event.target.value)" :value="activeCardTags().sub2" class="w-full mt-1 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-1.5">
+                <option value="">不显示</option>
+                <option value="type">分类</option>
+                <option value="hits">热度</option>
+                <option value="lang">语言</option>
+                <option value="year">年代</option>
+                <option value="area">地区</option>
+                <option value="actor">演员</option>
+                <option value="director">导演</option>
+                <option value="tag">标签</option>
+                <option value="duration">时长</option>
+                <option value="state">资源类别</option>
+                <option value="remarks">备注</option>
+                <option value="pubdate">上映日期</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div x-show="settingsTab==='sources'" class="space-y-6">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-semibold">API源列表（单选）</h3>
+            <div class="flex gap-2">
+              <button @click="exportSources()" class="text-xs px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700">导出</button>
+              <button @click="$refs.importFile.click()" class="text-xs px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700">导入</button>
+              <input type="file" x-ref="importFile" @change="importSources($event)" accept=".json" class="hidden">
+            </div>
+          </div>
+
+          <div class="space-y-2 max-h-72 overflow-y-auto">
+            <template x-for="(s,i) in sources" :key="s.id">
+              <div class="flex items-center gap-2 p-2 rounded-xl bg-gray-50 dark:bg-gray-800" :class="!s.enabled?'opacity-70':''">
+                <button @click="setActiveSource(i)" class="flex-shrink-0 w-10 h-6 rounded-full transition-colors relative" :class="s.enabled?'bg-green-500':'bg-gray-300 dark:bg-gray-600'">
+                  <span class="absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform" :class="s.enabled?'left-5':'left-1'"></span>
+                </button>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-medium truncate" x-text="s.name"></div>
+                  <div class="text-xs text-gray-500 truncate" x-text="s.url"></div>
+                </div>
+                <button @click="editSource(i)" class="p-1.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                </button>
+                <button @click="removeSource(i)" class="p-1.5 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                </button>
+              </div>
+            </template>
+          </div>
+
+          <button @click="addSource()" class="w-full mt-3 p-3 rounded-xl border-2 border-dashed border-gray-300 dark:border-gray-600 text-sm font-medium text-gray-500 hover:border-primary-500 hover:text-primary-500 transition-colors">+ 添加API源</button>
+        </div>
+      </div>
+
+
+      <div x-show="settingsTab==='data'" class="space-y-6">
+        <div class="p-4 rounded-xl bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700">
+          <div class="flex items-center justify-between mb-2">
+            <label class="block text-sm font-medium flex items-center gap-2">
+              <svg class="w-4 h-4 text-gray-500" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clip-rule="evenodd"/></svg>
+              GitHub Gist 同步
+            </label>
+            <a href="https://github.com/settings/tokens/new?scopes=gist&description=api_player%20sync" target="_blank" rel="noopener" class="text-xs text-primary-600 dark:text-primary-400 hover:underline">创建 Token</a>
+          </div>
+          <p class="text-xs text-gray-500 mb-3">把设置、API源、收藏、历史、搜索记录同步到私有 Gist，换设备也能恢复。</p>
+          <div class="space-y-3">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Personal Access Token（需 gist 权限）</label>
+              <div class="relative">
+                <input :type="gistShowToken ? 'text' : 'password'" x-model="gistCfg.token" @change="saveGistCfg()" placeholder="ghp_... 或 github_pat_..." class="w-full p-2.5 pr-16 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-primary-500 text-sm outline-none">
+                <button @click="gistShowToken=!gistShowToken" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-primary-500 px-2" x-text="gistShowToken?'隐藏':'显示'"></button>
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Gist ID（留空则首次上传时自动创建）</label>
+              <input type="text" x-model="gistCfg.gistId" @change="saveGistCfg()" placeholder="例如 0d9f3a1b2c4e..." class="w-full p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-primary-500 text-sm outline-none">
+            </div>
+            <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 cursor-pointer">
+              <span class="text-xs text-gray-600 dark:text-gray-300">自动同步（打开页面拉取，每 2 分钟推送变更）</span>
+              <input type="checkbox" :checked="gistCfg.autoSync" @change="toggleGistAutoSync($event.target.checked)" class="w-4 h-4 rounded text-primary-600">
+            </label>
+            <div class="flex gap-2">
+              <button @click="uploadGist()" :disabled="gistBusy" class="flex-1 p-2.5 rounded-xl bg-gradient-to-r from-primary-600 to-primary-500 text-white text-sm font-medium hover:shadow-lg transition-shadow disabled:opacity-50">上传到 Gist</button>
+              <button @click="downloadGist()" :disabled="gistBusy" class="flex-1 p-2.5 rounded-xl bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors disabled:opacity-50">从 Gist 下载</button>
+            </div>
+            <p class="text-xs min-h-4" :class="gistMsg.indexOf('失败')>=0 ? 'text-red-500' : 'text-gray-500'" x-text="gistMsg"></p>
+            <p class="text-xs text-gray-400" x-show="gistCfg.syncedAt" x-text="syncTimeText(gistCfg.syncedAt)"></p>
+            <p class="text-xs text-gray-400">Token 仅保存在本浏览器；建议使用仅勾选 gist 权限的独立 Token。下载会覆盖本地全部数据。</p>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-2">全局数据</label>
+          <p class="text-xs text-gray-500 mb-2">导出包含所有设置、API源、收藏、历史、搜索记录；导入将覆盖当前全部本地数据。</p>
+          <div class="flex gap-2">
+            <button @click="exportAllData()" class="flex-1 p-3 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-sm font-medium transition-colors">导出全部</button>
+            <button @click="$refs.importAllFile.click()" class="flex-1 p-3 rounded-xl bg-gradient-to-r from-primary-600 to-primary-500 text-white text-sm font-medium hover:shadow-lg transition-shadow">导入全部</button>
+            <input type="file" x-ref="importAllFile" @change="importAllData($event)" accept=".json" class="hidden">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-2">API源</label>
+          <div class="flex gap-2">
+            <button @click="exportSources()" class="flex-1 p-3 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-sm font-medium transition-colors">导出源</button>
+            <button @click="$refs.importFile.click()" class="flex-1 p-3 rounded-xl bg-gradient-to-r from-primary-600 to-primary-500 text-white text-sm font-medium hover:shadow-lg transition-shadow">导入源</button>
+            <input type="file" x-ref="importFile" @change="importSources($event)" accept=".json" class="hidden">
+          </div>
+        </div>
+
+        <div class="p-4 rounded-xl bg-gradient-to-r from-yellow-50 to-amber-50 dark:from-yellow-900/20 dark:to-amber-900/20 border border-yellow-200 dark:border-yellow-800">
+          <div class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+            <div class="flex-1">
+              <p class="text-sm font-medium text-yellow-900 dark:text-yellow-200 mb-1">关于数据存储</p>
+              <p class="text-xs text-yellow-800 dark:text-yellow-300">默认所有数据仅保存在浏览器本地存储（LocalStorage）；只有你主动配置 GitHub Gist 同步后，数据才会上传到自己的私有 Gist。清除浏览器数据前请先导出或同步。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+<div x-show="showSourceEdit" x-transition class="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4" @click.self="showSourceEdit=false">
+  <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-md p-6" @click.stop>
+    <h3 class="font-bold text-lg mb-4" x-text="editingIdx===null?'添加API源':'编辑API源'"></h3>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium mb-1">源名称</label>
+        <input type="text" x-model="editingSource.name" placeholder="苹果CMS源" class="w-full p-3 rounded-xl bg-gray-50 dark:bg-gray-800 border-0 focus:ring-2 focus:ring-primary-500 text-sm outline-none">
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1">API地址</label>
+        <input type="text" x-model="editingSource.url" placeholder="https://example.com/api.php/provide/vod/" class="w-full p-3 rounded-xl bg-gray-50 dark:bg-gray-800 border-0 focus:ring-2 focus:ring-primary-500 text-sm outline-none">
+        <p class="text-xs text-gray-500 mt-1">苹果CMS填到 /api.php/provide/vod/ 这一层</p>
+      </div>
+      <div class="pt-2 border-t border-gray-200 dark:border-gray-700 space-y-3">
+        <div>
+          <p class="text-xs font-medium text-gray-500 mb-2">本源跳过片头片尾（优先于全局设置）</p>
+          <div class="flex items-center gap-4 mb-2">
+            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+              <input type="checkbox" x-model="editingSource.skipIntro" class="w-4 h-4 rounded text-primary-600"> 跳过片头
+            </label>
+            <div class="flex items-center gap-1">
+              <input type="number" min="0" x-model.number="editingSource.introTime" class="w-14 px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-xs text-center">
+              <span class="text-xs text-gray-500">秒</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-4 mb-3">
+            <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+              <input type="checkbox" x-model="editingSource.skipOutro" class="w-4 h-4 rounded text-primary-600"> 跳过片尾
+            </label>
+            <div class="flex items-center gap-1">
+              <input type="number" min="0" x-model.number="editingSource.outroTime" class="w-14 px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-xs text-center">
+              <span class="text-xs text-gray-500">秒(倒计时)</span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div x-show="editingIdx !== null">
+            <div class="flex items-center justify-between mb-2">
+              <p class="text-xs font-medium text-gray-500">本源分类黑名单</p>
+              <button @click="showSourceBlacklistPicker=!showSourceBlacklistPicker" type="button" class="text-xs px-3 py-1 rounded-lg bg-primary-100 dark:bg-primary-900/30 text-primary-600 hover:bg-primary-200 dark:hover:bg-primary-900/50 transition-colors" x-text="showSourceBlacklistPicker ? '完成' : '可视化选择'"></button>
+            </div>
+            <p class="text-xs text-gray-400 mb-2">勾选后该分类在本源下隐藏。</p>
+            <div x-show="showSourceBlacklistPicker" x-transition class="p-3 rounded-xl bg-gray-50 dark:bg-gray-800 max-h-48 overflow-y-auto">
+              <div class="flex flex-wrap gap-2" x-show="allClassesList.length">
+                <template x-for="c in allClassesList" :key="c.type_id">
+                  <button @click="toggleSourceBlacklist(c)" type="button" class="px-3 py-1.5 rounded-lg text-xs font-medium transition-all" :class="isSourceBlacklisted(c)?'bg-red-500 text-white':'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600'" x-text="c.type_name"></button>
+                </template>
+              </div>
+              <p x-show="!allClassesList.length" class="text-xs text-gray-400">该源分类尚未加载，请保存源后返回刷新分类。</p>
+            </div>
+          </div>
+          <p x-show="editingIdx === null" class="text-xs text-gray-400">添加并保存源后，再次编辑此源可在此可视化选择分类黑名单。</p>
+        </div>
+        <div class="flex gap-3 mt-6">
+          <button @click="showSourceEdit=false" class="flex-1 p-3 rounded-xl bg-gray-100 dark:bg-gray-800 font-medium">取消</button>
+          <button @click="saveSource()" class="flex-1 p-3 rounded-xl bg-gradient-to-r from-primary-600 to-primary-500 text-white font-medium">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div x-show="showPlayer" x-transition class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center" @click.self="closePlayer()">
+  <div class="bg-white dark:bg-gray-900 w-full max-w-8xl overflow-hidden h-screen flex flex-col sm:flex-row relative" @click.stop>
+    <div class="flex-1 flex flex-col min-w-0 relative">
+      <div class="p-3 border-b border-gray-200 dark:border-gray-800 flex items-center gap-2 sm:hidden">
+        <h3 class="font-bold text-sm truncate" x-text="playerTitle"></h3>
+        <button @click="closePlayer()" class="ml-auto p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <div class="aspect-video bg-black relative h-full" id="playerBox" @mouseenter="playerHover=true"></div>
+
+      <button @click="togglePlayerSidebar()"
+        class="hidden sm:block absolute top-1/2 -translate-y-1/2 z-10 w-6 h-16 items-center justify-center transition-all opacity-0 hover:opacity-100"
+        :class="playerHover?'opacity-100':'opacity-0'"
+        style="right: 0;background:rgba(0,0,0,0.5)">
+        <div class="w-full h-full flex items-center justify-center rounded-l-lg">
+          <svg x-show="showPlayerSidebar" class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          <svg x-show="!showPlayerSidebar" class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        </div>
+      </button>
+
+      <div class="sm:hidden border-t border-gray-200 dark:border-gray-800 p-3 bg-gray-50 dark:bg-gray-800/50">
+        <div class="flex gap-1.5 mb-2 overflow-x-auto scrollbar-hide pb-1">
+          <template x-for="(g,i) in playGroups" :key="i">
+            <button @click="selectPlaySource(i)" class="px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-all flex-shrink-0"
+              :class="i===playSrc?'bg-primary-600 text-white':'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200'"
+              x-text="g.sn"></button>
+          </template>
+        </div>
+        <div class="flex gap-1.5 overflow-x-auto scrollbar-hide">
+          <template x-for="(ep,i) in sortedEps()" :key="ep.n+i">
+            <button @click="playEpisode(ep)" class="px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all flex-shrink-0"
+              :class="currentEps()[playEp]===ep?'bg-gradient-to-r from-primary-600 to-primary-500 text-white':'bg-white dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600'"
+              x-text="ep.n"></button>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <div x-show="showPlayerSidebar" class="hidden sm:flex w-72 lg:w-80 flex-col h-full min-h-0 border-l border-gray-200 dark:border-gray-800">
+      <div class="p-4 border-b border-gray-200 dark:border-gray-800">
+        <div class="flex items-start justify-between gap-2 mb-3">
+          <h3 class="font-bold text-base leading-tight line-clamp-2 flex-1" x-text="playerTitle"></h3>
+          <button @click="closePlayer()" class="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 flex-shrink-0">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <div class="flex gap-1.5 mb-3 flex-wrap">
+          <template x-for="(g,i) in playGroups" :key="i">
+            <button @click="selectPlaySource(i)" class="px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-all"
+              :class="i===playSrc?'bg-primary-600 text-white':'bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700'"
+              x-text="g.sn"></button>
+          </template>
+        </div>
+
+        <div class="flex items-center gap-1.5">
+          <button @click="prevEp()" class="flex-1 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-sm font-medium transition-colors">上一集</button>
+          <button @click="nextEp()" class="flex-1 py-1.5 rounded-lg bg-gradient-to-r from-primary-600 to-primary-500 text-white text-sm font-medium hover:shadow-lg transition-shadow">下一集</button>
+        </div>
+      </div>
+
+      <div class="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-500">排序:</span>
+          <button @click="toggleEpSort()" class="px-2 py-1 rounded text-xs font-medium transition-colors"
+            :class="epSortAsc?'bg-primary-100 dark:bg-primary-900/30 text-primary-600':'bg-gray-100 dark:bg-gray-800 text-gray-600'">
+            <span x-text="epSortAsc?'正序 ↓':'倒序 ↑'"></span>
+          </button>
+          <span class="text-xs text-gray-400 ml-auto" x-text="'共'+currentEps().length+'集'"></span>
+        </div>
+
+        <div class="grid grid-cols-4 gap-1.5">
+          <template x-for="(ep,i) in sortedEps()" :key="ep.n+i">
+            <button @click="playEpisode(ep)" class="py-1.5 rounded text-xs font-medium transition-all truncate"
+              :class="currentEps()[playEp]===ep?'bg-gradient-to-r from-primary-600 to-primary-500 text-white':'bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300'"
+              x-text="episodeLabel(ep)"></button>
+          </template>
+        </div>
+      </div>
+      <div class="border-t border-gray-200 dark:border-gray-700 pt-3 space-y-2">
+          <div class="flex gap-2">
+            <button @click="favCurrentItem()" class="flex-1 flex items-center justify-center gap-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+              :class="isFavCurrent()?'bg-red-50 dark:bg-red-900/20 text-red-500':'bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700'" title="收藏">
+              <svg class="w-4 h-4" :class="isFavCurrent()?'fill-red-500':''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+            </button>
+            <button @click="downloadCurrent()" class="flex-1 flex items-center justify-center gap-1 px-3 py-2 rounded-lg text-sm font-medium bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" title="下载">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            </button>
+            <button @click="shareCurrent()" class="flex-1 flex items-center justify-center gap-1 px-3 py-2 rounded-lg text-sm font-medium bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" title="分享">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/></svg>
+            </button>
+            <button @click="showPlayerSettings=!showPlayerSettings" class="flex-1 flex items-center justify-center gap-1 px-3 py-2 rounded-lg text-sm font-medium bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" title="设置">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            </button>
+          </div>
+    
+      </div>
+    </div>
+
+    <div x-show="showPlayerSettings " x-transition class="absolute right-2 sm:right-4 top-16 w-72 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 p-4 z-20 space-y-3 max-h-[70vh] overflow-y-auto">
+      <div class="flex items-center justify-between">
+        <h4 class="font-semibold text-sm">播放器设置</h4>
+        <button @click="showPlayerSettings=false" class="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-sm font-medium mb-2">播放器内核</label>
+          <div class="grid grid-cols-2 gap-2">
+            <button @click="setPlayerType('native')" class="p-2 rounded-xl border-2 text-xs" :class="cfg.playerType==='native'?'border-primary-500 bg-primary-50 dark:bg-primary-900/20':'border-gray-200 dark:border-gray-700'">原生</button>
+            <button @click="setPlayerType('art')" class="p-2 rounded-xl border-2 text-xs" :class="cfg.playerType==='art'?'border-primary-500 bg-primary-50 dark:bg-primary-900/20':'border-gray-200 dark:border-gray-700'">ArtPlayer</button>
+          </div>
+        </div>
+
+        <label class="flex items-center justify-between text-sm cursor-pointer">
+          <span>记忆倍速</span>
+          <input type="checkbox" x-model="cfg.rememberSpeed" @change="saveCfg()" class="w-4 h-4 rounded text-primary-600">
+        </label>
+
+        <div class="border-t border-gray-200 dark:border-gray-700 pt-3 space-y-2">
+          <label class="flex items-center justify-between text-sm cursor-pointer">
+            <span>进度跳过(片头)</span>
+          <input type="checkbox" x-model="cfg.skipIntro" @change="saveCfg()" class="w-4 h-4 rounded text-primary-600">
+        </label>
+        <div x-show="cfg.skipIntro" class="flex items-center gap-2 pl-4">
+          <input type="number" min="0" x-model.number="cfg.introTime" @change="saveCfg()" class="w-16 px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-xs text-center">
+          <span class="text-xs text-gray-500">秒</span>
+          <button @click="setIntroTimeFromPlayer()" class="px-2 py-1 rounded bg-primary-100 dark:bg-primary-900/30 text-primary-600 text-xs font-medium">获取当前</button>
+        </div>
+      </div>
+      <div class="space-y-2">
+        <label class="flex items-center justify-between text-sm cursor-pointer">
+          <span>进度跳过(片尾)</span>
+          <input type="checkbox" x-model="cfg.skipOutro" @change="saveCfg()" class="w-4 h-4 rounded text-primary-600">
+        </label>
+        <div x-show="cfg.skipOutro" class="flex items-center gap-2 pl-4">
+          <input type="number" min="0" x-model.number="cfg.outroTime" @change="saveCfg()" class="w-16 px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-xs text-center">
+          <span class="text-xs text-gray-500">秒</span>
+          <button @click="setOutroTimeFromPlayer()" class="px-2 py-1 rounded bg-primary-100 dark:bg-primary-900/30 text-primary-600 text-xs font-medium">获取当前</button>
+        </div>
+      </div>
+      <div class="space-y-2">
+        <label class="flex items-center justify-between text-sm cursor-pointer">
+          <span>自动连播</span>
+          <input type="checkbox" x-model="cfg.autoNext" @change="saveCfg()" class="w-4 h-4 rounded text-primary-600">
+        </label>
+      </div>
+      <div class="space-y-2" x-show="sniffedUrl">
+        <div class="text-xs text-gray-500 bg-gray-50 dark:bg-gray-700 rounded p-2 break-all">
+          <span class="font-medium">嗅探结果:</span> <span x-text="sniffedUrlType"></span><br>
+          <span class="font-medium">地址:</span> <span class="text-primary-600 dark:text-primary-400" x-text="sniffedUrl"></span>
+        </div>
+        <button @click="playSniffedUrl()" class="w-full py-2 px-3 rounded-lg text-sm font-medium bg-green-100 dark:bg-green-900/30 text-green-600 hover:bg-green-200 dark:hover:bg-green-900/50 transition-colors">
+          播放嗅探地址
+        </button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
