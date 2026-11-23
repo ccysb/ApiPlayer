@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { checkAlpineExpressions, checkMethodDefinitions } from './lib/guards.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const extDir = path.join(root, 'extension');
@@ -50,22 +51,9 @@ if (!fs.existsSync(cssPath)) {
 
 let html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 
-// Alpine CSP 解析器不支持正则字面量或除号。属性字符串里的 Tailwind 斜杠（如 bg-primary-900/30）
-// 是合法的，先剥掉引号内容再检查，只允许把 / 放在 JS 方法里。
-function stripQuoted(expr) {
-    return expr
-        .replace(/'(?:\\.|[^'\\])*'/g, "''")
-        .replace(/"(?:\\.|[^"\\])*"/g, '""')
-        .replace(/`(?:\\.|[^`\\])*`/g, '``');
-}
-const unsupportedSlash = [];
-const unsupportedComplex = [];
-for (const m of html.matchAll(/\s(?:x-[\w.-]+|@[\w.:-]+|:[\w.-]+)="([^"]*)"/g)) {
-    const bare = stripQuoted(m[1]);
-    if (bare.includes('/')) unsupportedSlash.push(m[1]);
-    // CSP 解析器不支持分号组合语句或 &&(...) 逗号表达式，会报 Unexpected token: xxx
-    if (bare.includes(';') || /&&\(/.test(bare)) unsupportedComplex.push(m[1]);
-}
+// Alpine CSP 表达式守卫：解析器不支持正则字面量/除号、分号组合语句或 &&(...) 逗号表达式。
+// 具体检查逻辑见 scripts/lib/guards.mjs（有单元测试覆盖）。
+const { unsupportedSlash, unsupportedComplex } = checkAlpineExpressions(html);
 if (unsupportedSlash.length) {
     console.error('Alpine 表达式含 /（CSP 解析器会报 Unexpected token: OPERATOR "/"），请移到 app() 方法：');
     unsupportedSlash.forEach((expr) => console.error(`  ${expr}`));
@@ -80,10 +68,7 @@ if (unsupportedComplex.length) {
 // 防止 this.xxx() 调用了却没有在 app() 里定义（例如 applyPortraitNarrow）。
 const inlineScripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
 const appCode = inlineScripts.length ? inlineScripts[inlineScripts.length - 1][1] : '';
-const calledMethods = [...appCode.matchAll(/this\.([A-Za-z_$][\w$]*)\s*\(/g)].map((m) => m[1]);
-const definedMethods = new Set([...appCode.matchAll(/^\s+(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(/gm)].map((m) => m[1]));
-const builtinMethods = new Set(['then', 'catch', 'finally', '$nextTick', '$watch', '$dispatch', '$el', '$refs']);
-const missingMethods = [...new Set(calledMethods)].filter((name) => !definedMethods.has(name) && !builtinMethods.has(name));
+const missingMethods = checkMethodDefinitions(appCode);
 if (missingMethods.length) {
     console.error('app() 中调用了未定义的方法，会在运行时报 TypeError：');
     missingMethods.forEach((name) => console.error(`  this.${name}()`));
