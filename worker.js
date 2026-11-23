@@ -2713,7 +2713,7 @@ export default {
         }
 
         if (path.startsWith('/parse/')) {// 解析播放地址
-            return handleParse(path.slice(7));
+            return handleParse(safeDecode(path.slice(7)));
         }
 
         return new Response(HTML, {
@@ -2721,6 +2721,10 @@ export default {
         });
     }
 };
+function safeDecode(s) {// 安全解码，失败时返回原值
+    try { return decodeURIComponent(s); } catch { return s; }
+}
+
 async function handleParse(rawUrl) {// 解析播放地址
     let url = rawUrl;
     if (!url.startsWith('http')) url = 'https://' + url;

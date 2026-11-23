@@ -201,3 +201,19 @@ test('/parse/ 未知地址返回 unknown', async () => {
     assert.equal(data.type, 'unknown');
     assert.equal(data.resolved, false);
 });
+
+test('/parse/ 百分号编码地址先解码再解析', async () => {
+    const res = await worker.fetch(new Request('http://localhost/parse/https%3A%2F%2Fcdn.example.com%2Fa.m3u8'));
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.type, 'direct');
+    assert.equal(data.url, 'https://cdn.example.com/a.m3u8');
+    assert.equal(data.resolved, true);
+});
+
+test('/parse/ 非法编码序列不崩溃，返回 JSON 错误响应', async () => {
+    const res = await worker.fetch(new Request('http://localhost/parse/https%ZZ%2Fcdn.example.com/a.m3u8'));
+    // 解码失败回退原值，无法构成合法 URL 时由 handleParse catch 兜底返回 500 JSON
+    assert.ok(res.status === 200 || res.status === 500);
+    await res.json(); // 响应体必为合法 JSON
+});
