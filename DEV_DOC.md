@@ -1,8 +1,8 @@
-# CMS Pro v3 开发文档
+# ApiPlayer 内部技术文档
 
 ## 概述
 
-苹果CMS api 是一个基于 Cloudflare Workers 的视频聚合播放前端，适配苹果CMS api规范，提供多源切换、播放器选择、广告过滤等功能。
+ApiPlayer 是一个基于 Web 标准的 CMS 聚合播放器，适配苹果 CMS 等接口规范，提供多源切换、播放器选择、收藏历史与 Gist 同步等功能。项目以 `worker.js` 为唯一源码，服务端逻辑与内嵌页面同源复用，部署形态见 [DEPLOY.md](./DEPLOY.md)。
 
 ## 技术栈
 
@@ -11,7 +11,7 @@
 | 后端   | Cloudflare Workers          |
 | 前端框架 | Alpine.js                   |
 | 样式   | Tailwind CSS                |
-| 视频库  | hls.js, ArtPlayer, XGPlayer |
+| 视频库  | hls.js, ArtPlayer        |
 | 协议   | m3u8/HLS 流媒体                |
 
 ## 项目结构
@@ -20,7 +20,7 @@
 worker.js
 ├── Cloudflare Worker 入口
 │   ├── proxy() - API 代理
-│   └── m3u8Proxy() - m3u8 流媒体代理
+│   └── handleM3u8Proxy() - m3u8 流媒体代理
 │
 ├── HTML 模板
 │   ├── Header - 搜索、主题、收藏、历史、设置
@@ -110,20 +110,21 @@ interface Episode {
 
 ```typescript
 interface Config {
-  theme: 'auto' | 'light' | 'dark';  // 主题模式
+  theme: 'auto' | 'light' | 'dark';     // 主题模式
   autoNext: boolean;                    // 自动下一集
   rememberSpeed: boolean;               // 记忆播放倍速
-  adFilter: boolean;                   // m3u8 广告过滤
-  playerType: 'native' | 'art' | 'xg' | 'potplayer' | 'vlc';
-  loadMode: 'page' | 'waterfall';      // 加载模式
+  playerType: 'native' | 'art' | 'potplayer' | 'vlc'; // 播放器内核；potplayer/vlc 走外部协议跳转
+  loadMode: 'page' | 'waterfall';      // 加载模式：翻页 / 无限滚动
   hiddenTypes: string;                 // 黑名单分类
   autoLoadMore: boolean;               // 自动加载更多
-  adSkipCount: number;                 // 跳过前几段
-  parseApis: string;                   // VIP 解析接口池
-  skipIntro: boolean;                 // 跳过片头
+  skipIntro: boolean;                  // 跳过片头
+  skipOutro: boolean;                  // 跳过片尾
   introTime: number;                   // 片头时间（秒）
   outroTime: number;                   // 片尾时间（秒）
-  smartAdRemove: boolean;              // 智能去广告
+  listLayout: string;                  // 列表布局（poster 等）
+  cardWall: boolean;                   // 卡片墙瀑布流开关
+  apiProxy: string;                    // 自定义代理地址（留空走同源）
+  cardTags: Record<string, string>;    // 卡片角标字段映射
 }
 ```
 
@@ -164,7 +165,6 @@ playerTitle: ''        // 播放器标题
 currentItem: null      // 当前视频项
 // 播放器实例
 _art: null             // ArtPlayer 实例
-_xg: null              // XGPlayer 实例
 _hls: null             // Hls.js 实例
 _observer: null        // IntersectionObserver 实例
 ```
@@ -195,7 +195,6 @@ _observer: null        // IntersectionObserver 实例
 | `renderPlayer()`       | 渲染播放器（根据配置选择内核）      |
 | `renderNativePlayer()` | 原生 video 标签 + hls.js |
 | `renderArtPlayer()`    | ArtPlayer 播放器        |
-| `renderXgPlayer()`     | XGPlayer 播放器         |
 | `processPlayUrl()`     | 处理播放地址（广告过滤）         |
 | `isWebPlayerUrl()`     | 检测是否为网页嵌入地址          |
 | `prevEp() / nextEp()`  | 上一集/下一集              |
@@ -324,6 +323,7 @@ _observer: null        // IntersectionObserver 实例
 | `cms_his`         | 播放历史 (JSON)         |
 | `cms_search_hist` | 搜索历史 (JSON)         |
 | `cms_spd`         | 播放倍速                |
+| `cms_gist`        | Gist 同步配置（Token / Gist ID / 自动同步） |
 | `cms_cls_<url>`   | 分类缓存 (按 API URL 隔离) |
 
 ## CDN 依赖
@@ -340,45 +340,15 @@ _observer: null        // IntersectionObserver 实例
 
 <!-- ArtPlayer -->
 <script src="https://unpkg.com/artplayer/dist/artplayer.js"></script>
-
-<!-- XGPlayer -->
-<script src="https://unpkg.com/xgplayer@3.0.17/dist/index.min.js"></script>
-<link rel="stylesheet" href="https://unpkg.com/xgplayer@3.0.17/dist/index.min.css">
 ```
 
-## 部署
-
-1. 将 `worker.js` 完整内容部署到 Cloudflare Workers
-2. 配置自定义域名（可选）
-3. 添加 API 源开始使用
-
-## 版本历史
-
-### v3
-
-- 新增播放器右侧面板（电脑端）
-- 新增手机端自适应底部布局
-- 新增网页播放器检测（iframe 嵌入）
-- 新增播放器内设置（片头/片尾跳过、自动连播、智能去广）
-- 新增选集排序功能
-- 优化 m3u8 代理相对路径处理
-
-### v2
-
-- 支持 ArtPlayer、XGPlayer 多播放器
-- 支持 PotPlayer、VLC 外部播放器
-- m3u8 广告过滤
-- 瀑布流加载模式
-
-### v1
-
-- 基础 CMS 视频列表
-- 分页加载
-- 收藏、历史功能
+> 以上是**静态页**（index.html）的 CDN 依赖。浏览器扩展构建时（`pnpm build:extension`）会把它们替换为本地 `extension/vendor/` 下的 CSP 兼容版本（Alpine 用 `@alpinejs/csp`，无 `unsafe-eval`），Tailwind 改为预编译静态 CSS。
 
 ## 部署
 
-> 完整的多平台部署说明见 [DEPLOY.md](./DEPLOY.md)，项目概览与一键部署见 [README.md](./README.md)。
+版本历史与变更记录见 [CHANGELOG.md](./CHANGELOG.md)。
+
+完整的多平台部署说明见 [DEPLOY.md](./DEPLOY.md)，项目概览与一键部署见 [README.md](./README.md)。下面仅保留 Cloudflare Workers 的快速部署命令。
 
 ### 快速部署（Cloudflare Workers）
 
