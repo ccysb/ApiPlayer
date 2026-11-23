@@ -14,12 +14,14 @@
     "build:tailwind": "node scripts/build-tailwind.mjs",
     "build:extension": "node scripts/build-static.mjs && node scripts/build-tailwind.mjs && node scripts/build-extension.mjs",
     "build:crx": "node scripts/build-static.mjs && node scripts/build-tailwind.mjs && node scripts/build-extension.mjs && node scripts/build-crx.mjs",
+    "test": "node --test",
+    "check:artifacts": "node scripts/check-artifacts.mjs",
+    "check": "node --check worker.js && node --check server.js && node --check lib/handler.js && node scripts/check-artifacts.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {
     "crx3": "^2.0.0",
-    "jsdom": "^29.1.1",
     "tailwindcss": "^3.4.19",
     "wrangler": "^4.0.0"
   },
