@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 语法与产物校验
+        run: pnpm check
+
+      - name: 单元测试
+        run: pnpm test
+
+      - name: 构建静态页
+        run: pnpm build:static
+
+      - name: 校验 index.html 与唯一源码一致
+        run: git diff --exit-code -- index.html
+
+      - name: 产物不变量复核
+        run: node scripts/check-artifacts.mjs

@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/ccysb/ApiPlayer"><img src="https://img.shields.io/badge/GitHub-ccysb%2FApiPlayer-181717?logo=github" alt="GitHub"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
-  <a href="https://github.com/ccysb/ApiPlayer/actions"><img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build"></a>
+  <a href="https://github.com/ccysb/ApiPlayer/actions/workflows/ci.yml"><img src="https://github.com/ccysb/ApiPlayer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
 ## 一键部署
