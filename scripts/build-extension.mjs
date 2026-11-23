@@ -19,10 +19,11 @@ const extDir = path.join(root, 'extension');
 const vendorDir = path.join(extDir, 'vendor');
 fs.mkdirSync(vendorDir, { recursive: true });
 
+// 固定版本，保证 vendor 产物可重现（避免 @latest 漂移导致不可重现 diff）
 const deps = [
     { url: 'https://unpkg.com/@alpinejs/csp@3.15.0/dist/cdn.min.js', file: 'alpine.js' },
-    { url: 'https://unpkg.com/hls.js@latest/dist/hls.min.js', file: 'hls.js' },
-    { url: 'https://unpkg.com/artplayer@latest/dist/artplayer.js', file: 'artplayer.js' }
+    { url: 'https://unpkg.com/hls.js@1.7.4/dist/hls.min.js', file: 'hls.js' },
+    { url: 'https://unpkg.com/artplayer@5.4.0/dist/artplayer.js', file: 'artplayer.js' }
 ];
 
 async function download(url, dest) {
@@ -129,10 +130,12 @@ chrome.action.onClicked.addListener(focusOrCreateTab);
 `;
 fs.writeFileSync(path.join(extDir, 'background.js'), backgroundJs, 'utf8');
 
+// 版本号单一真源：从 package.json 读取，避免与 manifest 手工维护两套版本
+const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const manifest = {
   manifest_version: 3,
   name: 'ApiPlayer',
-  version: '1.0.6',
+  version: pkg.version,
   description: 'CMS 聚合播放器浏览器扩展（主题滚动条、全高集数面板、CSP 表达式兼容）',
   action: {
     default_title: '打开 ApiPlayer'

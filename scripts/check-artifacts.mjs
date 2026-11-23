@@ -52,8 +52,7 @@ try {
     } else {
         const manifest = JSON.parse(read('extension/manifest.json'));
         if (manifest.version !== pkg.version) {
-            // 版本统一前为警告；阶段 2 统一 package.json 版本后改为强制失败。
-            console.warn(`WARN  版本不一致：package.json=${pkg.version}，extension/manifest.json=${manifest.version}（将在版本治理阶段统一）`);
+            fails.push(`版本不一致：package.json=${pkg.version}，extension/manifest.json=${manifest.version}，请重新运行 pnpm build:extension`);
         } else {
             console.log(`PASS  版本号一致（${pkg.version}）`);
         }
